@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 状态栏 -->
+    <div id="status-bar" class="status-bar hidden">
+      <span id="status-icon">●</span>
+      <span id="status-text">后端未连接</span>
+    </div>
+
+    <!-- 主界面 -->
+    <div id="main-view">
+      <h1>Bili Analyzer</h1>
+      <p id="video-title" class="video-title">请在 B 站视频页面使用</p>
+
+      <div class="form-group">
+        <label for="source-select">转录方式</label>
+        <select id="source-select">
+          <option value="bilibili_api">B站字幕（推荐）</option>
+          <option value="whisper_local">Whisper 本地</option>
+          <option value="cloud_api">云端 ASR</option>
+        </select>
+      </div>
+
+      <button id="btn-analyze" class="btn-primary" disabled>分析视频</button>
+    </div>
+
+    <!-- 进度 -->
+    <div id="progress-view" class="hidden">
+      <div class="progress-bar">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+      <p id="progress-text">准备中...</p>
+      <div id="partial-preview" class="partial-preview hidden"></div>
+    </div>
+
+    <!-- 错误 -->
+    <div id="error-view" class="hidden">
+      <p id="error-text" class="error-text"></p>
+      <button id="btn-retry" class="btn-secondary">重试</button>
+    </div>
+
+    <!-- 结果 -->
+    <div id="result-view" class="hidden">
+      <div id="result-preview" class="result-preview"></div>
+      <div class="btn-group">
+        <button id="btn-copy" class="btn-secondary">复制 Markdown</button>
+        <button id="btn-download" class="btn-primary">下载笔记</button>
+      </div>
+      <button id="btn-reanalyze" class="btn-link">重新分析</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

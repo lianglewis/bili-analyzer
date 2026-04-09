@@ -1,0 +1,7 @@
+fastapi>=0.115.0
+uvicorn>=0.30.0
+httpx>=0.27.0
+pydantic>=2.9.0
+yt-dlp>=2024.12.0
+# 可选：本地 Whisper 转录
+# openai-whisper>=20240930
