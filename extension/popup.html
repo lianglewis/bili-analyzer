@@ -29,13 +29,22 @@
       <button id="btn-analyze" class="btn-primary" disabled>分析视频</button>
     </div>
 
-    <!-- 进度 -->
-    <div id="progress-view" class="hidden">
-      <div class="progress-bar">
-        <div id="progress-fill" class="progress-fill"></div>
+    <!-- 分析（进度 + 结果统一视图）-->
+    <div id="analysis-view" class="hidden">
+      <div id="analysis-preview" class="result-preview"></div>
+      <div id="analysis-progress">
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <p id="progress-text">准备中...</p>
       </div>
-      <p id="progress-text">准备中...</p>
-      <div id="partial-preview" class="partial-preview hidden"></div>
+      <div id="analysis-actions" class="hidden">
+        <div class="btn-group">
+          <button id="btn-copy" class="btn-secondary">复制 Markdown</button>
+          <button id="btn-download" class="btn-primary">下载笔记</button>
+        </div>
+        <button id="btn-reanalyze" class="btn-link">重新分析</button>
+      </div>
     </div>
 
     <!-- 错误 -->
@@ -43,15 +52,22 @@
       <p id="error-text" class="error-text"></p>
       <button id="btn-retry" class="btn-secondary">重试</button>
     </div>
+  </div>
 
-    <!-- 结果 -->
-    <div id="result-view" class="hidden">
-      <div id="result-preview" class="result-preview"></div>
-      <div class="btn-group">
-        <button id="btn-copy" class="btn-secondary">复制 Markdown</button>
-        <button id="btn-download" class="btn-primary">下载笔记</button>
+  <!-- 术语追问弹窗 -->
+  <div id="term-modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="term-modal-name"></h3>
+        <button id="term-modal-close" class="modal-close-btn">&times;</button>
       </div>
-      <button id="btn-reanalyze" class="btn-link">重新分析</button>
+      <p id="term-modal-explanation" class="modal-explanation"></p>
+      <div id="term-modal-suggestions" class="modal-suggestions"></div>
+      <div class="modal-ask-row">
+        <input id="term-ask-input" type="text" placeholder="输入你的问题..." class="modal-input">
+        <button id="term-ask-btn" class="btn-primary modal-ask-btn">问</button>
+      </div>
+      <div id="term-modal-answer" class="modal-answer"></div>
     </div>
   </div>
 

@@ -3,20 +3,28 @@
 import asyncio
 import uuid
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from models import (
     AnalysisResult,
     AnalyzeRequest,
     TaskStatus,
+    TextSegment,
     VideoCategory,
 )
 
 _tasks: Dict[str, TaskStatus] = {}
 
+# 转录缓存：bvid → segments，用于术语追问时提供上下文
+_transcripts: Dict[str, List[TextSegment]] = {}
+
 
 def get_task(task_id: str) -> Optional[TaskStatus]:
     return _tasks.get(task_id)
+
+
+def get_transcript(bvid: str) -> Optional[List[TextSegment]]:
+    return _transcripts.get(bvid)
 
 
 async def run_pipeline(req: AnalyzeRequest) -> str:
@@ -40,7 +48,8 @@ def _extract_bvid(url: str) -> str:
     return m.group(1)
 
 
-def _build_result(title, url, bvid, first_pass=None, qa_sections=None):
+def _build_result(title, url, bvid, first_pass=None, qa_sections=None,
+                   title_hook="", title_explanation=""):
     """构建（可能不完整的）AnalysisResult"""
     from note import generate_markdown
 
@@ -50,8 +59,11 @@ def _build_result(title, url, bvid, first_pass=None, qa_sections=None):
         bvid=bvid,
         category=first_pass["category"] if first_pass else VideoCategory.KNOWLEDGE,
         summary=first_pass["summary"] if first_pass else "",
+        title_hook=title_hook,
+        title_explanation=title_explanation,
         practical_values=first_pass.get("practical_values") if first_pass else None,
-        key_terms=first_pass["key_terms"] if first_pass else [],
+        concept_flow=first_pass.get("concept_flow", []) if first_pass else [],
+        term_groups=first_pass.get("term_groups") if first_pass else None,
         qa_sections=qa_sections,
     )
     result.markdown = generate_markdown(result)
@@ -61,6 +73,8 @@ def _build_result(title, url, bvid, first_pass=None, qa_sections=None):
 async def _process(task_id: str, req: AnalyzeRequest):
     task = _tasks[task_id]
     title = ""
+    title_hook = ""
+    title_explanation = ""
     first_pass = None
     qa_sections = None
 
@@ -76,10 +90,26 @@ async def _process(task_id: str, req: AnalyzeRequest):
         _update(task, "transcribing", 10, "获取转录文本...")
         from transcript import get_transcript
         segments = await get_transcript(req, bvid)
-        _update(task, "transcribing", 20,
-                f"转录完成，共 {len(segments)} 条字幕，开始 AI 分析...")
 
-        # ── Step 2: 第一轮 — 分类 + 摘要 + 实用价值 + 关键术语 ──
+        # 缓存转录，用于后续术语追问
+        _transcripts[bvid] = segments
+
+        _update(task, "transcribing", 20,
+                f"转录完成，共 {len(segments)} 条字幕")
+
+        # ── Step 1.5: 快速标题解读（让用户早点看到内容）──
+        _update(task, "analyzing", 22, "解读标题中...")
+        from analyzer import explain_title
+        title_info = await explain_title(segments, title)
+        title_hook = title_info.get("hook", "")
+        title_explanation = title_info.get("answer", "")
+        task.result = _build_result(
+            title, req.url, bvid,
+            title_hook=title_hook, title_explanation=title_explanation
+        )
+        _update(task, "analyzing", 28, "标题解读完成，AI 深度分析中...")
+
+        # ── Step 2: 第一轮 — 分类 + 摘要 + 分组术语 + 概念脉络 ──
         _update(task, "analyzing", 30, "AI 分类 + 提取关键术语中...")
         from analyzer import analyze_first_pass
         first_pass = await analyze_first_pass(segments, title)
@@ -91,18 +121,27 @@ async def _process(task_id: str, req: AnalyzeRequest):
         }.get(first_pass["category"], "未知")
         _update(task, "analyzing", 50,
                 f"识别为「{cat_cn}」视频，深度提取中...")
-        task.result = _build_result(title, req.url, bvid, first_pass)
+        task.result = _build_result(
+            title, req.url, bvid, first_pass,
+            title_hook=title_hook, title_explanation=title_explanation
+        )
 
-        # ── Step 3: 第二轮 — Q&A 深度提取（统一三类）──
+        # ── Step 3: 第二轮 — Q&A 深度提取 ──
         from analyzer import extract_qa_sections
         _update(task, "analyzing", 55, "问答式深度提取中...")
         qa_sections = await extract_qa_sections(segments, first_pass["category"])
-        task.result = _build_result(title, req.url, bvid, first_pass, qa_sections)
+        task.result = _build_result(
+            title, req.url, bvid, first_pass, qa_sections,
+            title_hook=title_hook, title_explanation=title_explanation
+        )
         _update(task, "analyzing", 90, "深度提取完成，生成笔记...")
 
         # ── Step 4: 最终结果 ──
         _update(task, "analyzing", 95, "生成最终笔记...")
-        task.result = _build_result(title, req.url, bvid, first_pass, qa_sections)
+        task.result = _build_result(
+            title, req.url, bvid, first_pass, qa_sections,
+            title_hook=title_hook, title_explanation=title_explanation
+        )
         _update(task, "done", 100, "分析完成")
 
     except Exception as e:
@@ -110,7 +149,10 @@ async def _process(task_id: str, req: AnalyzeRequest):
         traceback.print_exc()
         if first_pass and not task.result:
             try:
-                task.result = _build_result(title, req.url, bvid, first_pass, qa_sections)
+                task.result = _build_result(
+                    title, req.url, bvid, first_pass, qa_sections,
+                    title_explanation=title_explanation
+                )
             except Exception:
                 pass
         _update(task, "error", task.progress, f"错误: {e}")

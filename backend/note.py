@@ -29,6 +29,14 @@ def generate_markdown(result: AnalysisResult) -> str:
     lines.append(f"> 分类: {cat_map.get(result.category, str(result.category))}")
     lines.append("")
 
+    # ── 标题解读 ──
+    if result.title_explanation:
+        hook = result.title_hook if result.title_hook else "这个标题在说什么？"
+        lines.append(f"## {hook}")
+        lines.append("")
+        lines.append(result.title_explanation)
+        lines.append("")
+
     # ── 摘要 ──
     lines.append("## 摘要")
     lines.append("")
@@ -43,13 +51,29 @@ def generate_markdown(result: AnalysisResult) -> str:
             lines.append(f"- **{pv.point}** — {pv.detail}")
         lines.append("")
 
-    # ── 关键术语 ──
-    lines.append("## 关键术语")
-    lines.append("")
-    for term in result.key_terms:
-        ts = _timestamp_link(term.timestamp, result.video_url)
-        lines.append(f"- **{term.term}** {ts} — {term.context}")
-    lines.append("")
+    # ── 概念脉络 ──
+    if result.concept_flow:
+        lines.append("## 概念脉络")
+        lines.append("")
+        for node in result.concept_flow:
+            ts = _timestamp_link(node.timestamp, result.video_url)
+            indent = "  " if node.depth > 0 else ""
+            lines.append(f"{indent}- {node.label} {ts}")
+        lines.append("")
+
+    # ── 分组关键术语 ──
+    if result.term_groups:
+        lines.append("## 关键术语")
+        lines.append("")
+        for group in result.term_groups:
+            lines.append(f"### {group.group_name}")
+            lines.append("")
+            for term in group.terms:
+                ts = _timestamp_link(term.timestamp, result.video_url)
+                lines.append(
+                    f"- **{term.term}** {ts} — {term.explanation}"
+                )
+            lines.append("")
 
     # ── Q&A 深度内容 ──
     if result.qa_sections:

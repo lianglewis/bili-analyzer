@@ -1,5 +1,6 @@
 /**
  * popup.js — 主控制器
+ * 渐进式卡片渲染：数据就绪时卡片逐个出现（默认折叠 + fade-in）
  * 结果持久化到 chrome.storage.local，popup 关闭重开不丢失
  */
 
@@ -9,40 +10,38 @@ let pollTimer = null;
 let currentMarkdown = "";
 let currentTitle = "";
 let currentBvid = "";
+let currentResult = null;
+
+// 跟踪已渲染的卡片，避免重复创建
+let renderedCards = {};
 
 // ── 初始化 ───────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
-  // 恢复用户设置
   const settings = await chrome.storage.sync.get(["transcriptSource"]);
   if (settings.transcriptSource) {
     $("#source-select").value = settings.transcriptSource;
   }
 
-  // 检查后端
   const backendOk = await checkBackend();
   if (!backendOk) {
     showStatus("err", "后端未启动 — 请运行 python app.py");
   }
 
-  // 检查当前页面
   const videoInfo = await getVideoInfo();
   if (videoInfo && videoInfo.bvid) {
     currentBvid = videoInfo.bvid;
     $("#video-title").textContent = videoInfo.title || videoInfo.bvid;
     $("#btn-analyze").disabled = !backendOk;
 
-    // 尝试恢复该视频的已有结果
     const saved = await chrome.storage.local.get([
       "currentTaskId",
       `result_${currentBvid}`,
     ]);
 
     if (saved[`result_${currentBvid}`]) {
-      // 有缓存结果，直接展示
       showResult(saved[`result_${currentBvid}`]);
     } else if (saved.currentTaskId) {
-      // 有进行中的任务，继续轮询
       startPolling(saved.currentTaskId);
     }
   } else {
@@ -50,17 +49,28 @@ document.addEventListener("DOMContentLoaded", async () => {
     $("#btn-analyze").disabled = true;
   }
 
-  // 绑定事件
   $("#btn-analyze").addEventListener("click", handleAnalyze);
   $("#btn-retry").addEventListener("click", handleRetry);
   $("#btn-copy").addEventListener("click", handleCopy);
   $("#btn-download").addEventListener("click", handleDownload);
   $("#btn-reanalyze").addEventListener("click", handleReanalyze);
 
-  // 保存转录方式选择
+  $("#term-modal-close").addEventListener("click", closeTermModal);
+  $("#term-modal-overlay").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) closeTermModal();
+  });
+
+  $("#term-ask-btn").addEventListener("click", handleTermAsk);
+  $("#term-ask-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleTermAsk();
+  });
+
   $("#source-select").addEventListener("change", (e) => {
     chrome.storage.sync.set({ transcriptSource: e.target.value });
   });
+
+  // 事件委托：统一处理 analysis-preview 内的点击
+  setupCardContainer();
 });
 
 // ── 核心流程 ─────────────────────────────────────────
@@ -75,8 +85,7 @@ async function handleAnalyze() {
   currentTitle = videoInfo.title || videoInfo.bvid;
   currentBvid = videoInfo.bvid;
 
-  // 自动获取 B 站登录 Cookie
-  const { sessdata } = await sendBg({ action: "getSessdata" }) || {};
+  const { sessdata } = (await sendBg({ action: "getSessdata" })) || {};
 
   const data = {
     url: videoInfo.url,
@@ -84,13 +93,14 @@ async function handleAnalyze() {
     bilibili_sessdata: sessdata || null,
   };
 
-  showView("progress");
-  updateProgress(5, sessdata ? "已获取登录信息，提交分析..." : "未登录B站，提交分析...");
+  showView("analysis");
+  resetRenderedCards();
+  updateProgress(
+    5,
+    sessdata ? "已获取登录信息，提交分析..." : "未登录B站，提交分析..."
+  );
 
-  const resp = await sendBg({
-    action: "startAnalysis",
-    data,
-  });
+  const resp = await sendBg({ action: "startAnalysis", data });
 
   if (!resp || resp.error) {
     showError(resp ? resp.error : "扩展通信失败，请刷新页面后重试");
@@ -102,24 +112,17 @@ async function handleAnalyze() {
 }
 
 function startPolling(taskId) {
-  showView("progress");
+  showView("analysis");
   if (pollTimer) clearInterval(pollTimer);
 
   pollTimer = setInterval(async () => {
-    const task = await sendBg({
-      action: "checkTask",
-      taskId,
-    });
-
-    if (!task || task.error) {
-      return;
-    }
+    const task = await sendBg({ action: "checkTask", taskId });
+    if (!task || task.error) return;
 
     updateProgress(task.progress, task.message);
 
-    // 有中间结果就实时渲染预览
-    if (task.result && task.status !== "done") {
-      showPartialResult(task.result, task.message);
+    if (task.result) {
+      updateAnalysisView(task.result, task.message, false);
     }
 
     if (task.status === "done") {
@@ -130,18 +133,17 @@ function startPolling(taskId) {
           [`result_${currentBvid}`]: task.result,
         });
       }
-      showResult(task.result);
+      updateAnalysisView(task.result, "", true);
     } else if (task.status === "error") {
       clearInterval(pollTimer);
       await chrome.storage.local.remove("currentTaskId");
-      // 即使出错，如果有中间结果也保留
       if (task.result) {
         if (currentBvid) {
           await chrome.storage.local.set({
             [`result_${currentBvid}`]: task.result,
           });
         }
-        showResult(task.result);
+        updateAnalysisView(task.result, "", true);
         showStatus("err", task.message);
       } else {
         showError(task.message);
@@ -155,7 +157,6 @@ function handleRetry() {
 }
 
 async function handleReanalyze() {
-  // 清除缓存结果，重新分析
   if (currentBvid) {
     await chrome.storage.local.remove(`result_${currentBvid}`);
   }
@@ -180,10 +181,334 @@ function handleDownload() {
   URL.revokeObjectURL(url);
 }
 
+// ── 渐进式渲染 ──────────────────────────────────────
+
+function resetRenderedCards() {
+  renderedCards = {};
+  const preview = $("#analysis-preview");
+  if (preview) preview.innerHTML = "";
+  $("#analysis-progress").classList.remove("hidden");
+  $("#analysis-actions").classList.add("hidden");
+}
+
+function appendCard(key, title, body, collapsed) {
+  if (renderedCards[key]) return;
+  renderedCards[key] = true;
+
+  const container = $("#analysis-preview");
+  const card = document.createElement("div");
+  card.className = "collapsible-card fade-in" + (collapsed ? " collapsed" : "");
+  card.dataset.cardKey = key;
+  card.innerHTML =
+    `<div class="card-header"><span class="card-title">${title}</span>` +
+    `<span class="card-arrow">›</span></div>` +
+    `<div class="card-body">${body}</div>`;
+  container.appendChild(card);
+}
+
+function updateAnalysisView(result, msg, isDone) {
+  currentResult = result;
+  if (result.markdown) currentMarkdown = result.markdown;
+  if (result.video_title) currentTitle = result.video_title;
+
+  const container = $("#analysis-preview");
+  const videoUrl = result.video_url || "";
+
+  // 头部（只渲染一次）
+  if (!renderedCards._header && result.video_title) {
+    renderedCards._header = true;
+    const catMap = { entertainment: "娱乐", tutorial: "教程", knowledge: "知识讲解" };
+    const hdr = document.createElement("div");
+    hdr.className = "result-header fade-in";
+    hdr.innerHTML =
+      `<div class="result-title">${esc(result.video_title)}</div>` +
+      `<span class="meta-cat">${catMap[result.category] || result.category || ""}</span>`;
+    container.appendChild(hdr);
+  }
+
+  // 标题解读（~25%）
+  if (result.title_explanation && !renderedCards.title_explain) {
+    const hookTitle = result.title_hook || "这个标题在说什么？";
+    appendCard("title_explain", esc(hookTitle),
+      `<p>${escBr(result.title_explanation)}</p>`, true);
+  }
+
+  // 摘要（~50%）
+  if (result.summary && !renderedCards.summary) {
+    appendCard("summary", "摘要", `<p>${escBr(result.summary)}</p>`, true);
+  }
+
+  // 实用价值（~50%）
+  if (result.practical_values && result.practical_values.length && !renderedCards.pv) {
+    let inner = "";
+    for (const pv of result.practical_values) {
+      inner += `<div class="pv-item">`;
+      inner += `<div class="pv-point">${esc(pv.point)}</div>`;
+      inner += `<div class="pv-detail">${escBr(pv.detail)}</div>`;
+      inner += `</div>`;
+    }
+    appendCard("pv", "这个视频对你有什么用？", inner, true);
+  }
+
+  // 概念脉络（~50%）
+  if (result.concept_flow && !renderedCards.flow) {
+    const flowHtml = buildFlowHtml(result.concept_flow, videoUrl);
+    if (flowHtml) {
+      appendCard("flow", "概念脉络", flowHtml, true);
+    }
+  }
+
+  // 关键术语（~50%）
+  if (result.term_groups && result.term_groups.length && !renderedCards.terms) {
+    appendCard("terms", "关键术语",
+      buildTermGroupsHtml(result.term_groups, videoUrl), true);
+  }
+
+  // 深度解析（~90%）
+  if (result.qa_sections && result.qa_sections.length && !renderedCards.qa) {
+    appendCard("qa", "深度解析",
+      buildQaSectionsHtml(result.qa_sections, videoUrl), true);
+  }
+
+  // 完成：隐藏进度条，显示操作按钮
+  if (isDone) {
+    $("#analysis-progress").classList.add("hidden");
+    $("#analysis-actions").classList.remove("hidden");
+  }
+}
+
+// 从缓存恢复时使用
+async function showResult(result) {
+  showView("analysis");
+  resetRenderedCards();
+  updateAnalysisView(result, "", true);
+  await restoreExpandState();
+}
+
+function saveExpandState() {
+  if (!currentBvid) return;
+  const cards = [];
+  document.querySelectorAll(".collapsible-card:not(.collapsed)").forEach((card) => {
+    if (card.dataset.cardKey) cards.push(card.dataset.cardKey);
+  });
+  const qa = [];
+  document.querySelectorAll(".qa-item:not(.collapsed)").forEach((item, i) => {
+    qa.push(i);
+  });
+  chrome.storage.local.set({ [`expand_${currentBvid}`]: { cards, qa } });
+}
+
+async function restoreExpandState() {
+  if (!currentBvid) return;
+  const saved = await chrome.storage.local.get(`expand_${currentBvid}`);
+  const state = saved[`expand_${currentBvid}`];
+  if (!state) return;
+
+  // 恢复卡片展开状态
+  if (state.cards) {
+    for (const key of state.cards) {
+      const card = document.querySelector(`.collapsible-card[data-card-key="${key}"]`);
+      if (card) card.classList.remove("collapsed");
+    }
+  }
+  // 恢复 QA 子项展开状态
+  if (state.qa) {
+    const qaItems = document.querySelectorAll(".qa-item");
+    for (const idx of state.qa) {
+      if (qaItems[idx]) qaItems[idx].classList.remove("collapsed");
+    }
+  }
+}
+
+// ── HTML 构建器 ──────────────────────────────────────
+
+function buildFlowHtml(flow, videoUrl) {
+  // 向后兼容：旧缓存中 concept_flow 是字符串
+  if (typeof flow === "string") {
+    return flow ? `<div class="flow-chain">${esc(flow)}</div>` : "";
+  }
+  if (!Array.isArray(flow) || !flow.length) return "";
+
+  let h = `<div class="flow-tree">`;
+  for (const node of flow) {
+    const isChild = node.depth > 0;
+    const ts = node.timestamp > 0 ? fmtTs(node.timestamp, videoUrl) : "";
+    h += `<div class="flow-node${isChild ? " flow-child" : ""}">`;
+    h += `<span class="flow-dot"></span>`;
+    h += `<span class="flow-label">${esc(node.label)}</span>`;
+    if (ts) h += ` <span class="flow-ts">${ts}</span>`;
+    h += `</div>`;
+  }
+  h += `</div>`;
+  return h;
+}
+
+function buildTermGroupsHtml(groups, videoUrl) {
+  let h = "";
+  for (const group of groups) {
+    h += `<div class="term-group">`;
+    h += `<div class="group-name">${esc(group.group_name)}</div>`;
+    for (const t of group.terms) {
+      h += `<div class="term-item">`;
+      h += `<span class="clickable-term" data-term="${esc(t.term)}">${esc(t.term)}</span>`;
+      h += ` <span class="term-ts">${fmtTs(t.timestamp, videoUrl)}</span>`;
+      h += `<div class="term-explain">${esc(t.explanation)}</div>`;
+      h += `</div>`;
+    }
+    h += `</div>`;
+  }
+  return h;
+}
+
+function buildQaSectionsHtml(sections, videoUrl) {
+  let h = "";
+  for (const qa of sections) {
+    h += `<div class="qa-item collapsed">`;
+    h += `<div class="qa-header">`;
+    h += `<span class="qa-q">${esc(qa.question)}</span>`;
+    h += `<span class="qa-meta">${fmtTs(qa.timestamp, videoUrl)}`;
+    h += `<span class="sub-arrow">›</span></span></div>`;
+    h += `<div class="qa-body">`;
+    h += `<div class="qa-a">${escBr(qa.answer)}</div>`;
+    if (qa.quote) {
+      h += `<blockquote class="qa-quote">${esc(qa.quote)}</blockquote>`;
+    }
+    if (qa.evidence) {
+      h += `<div class="qa-evidence">${esc(qa.evidence)}</div>`;
+    }
+    if (qa.sub_points && qa.sub_points.length) {
+      h += `<ul class="qa-points">`;
+      for (const pt of qa.sub_points) h += `<li>${esc(pt)}</li>`;
+      h += `</ul>`;
+    }
+    h += `</div></div>`;
+  }
+  return h;
+}
+
+// ── 事件委托 ─────────────────────────────────────────
+
+function setupCardContainer() {
+  const preview = $("#analysis-preview");
+  if (!preview) return;
+
+  preview.addEventListener("click", (e) => {
+    // 时间戳跳转
+    const tsLink = e.target.closest(".ts-link");
+    if (tsLink) {
+      e.preventDefault();
+      sendBg({ action: "jumpToTime", time: parseInt(tsLink.dataset.time) });
+      return;
+    }
+
+    // 术语点击
+    const termEl = e.target.closest(".clickable-term");
+    if (termEl && currentResult && currentResult.term_groups) {
+      const name = termEl.dataset.term;
+      for (const group of currentResult.term_groups) {
+        for (const t of group.terms) {
+          if (t.term === name) {
+            openTermModal(t.term, t.explanation, t.timestamp);
+            return;
+          }
+        }
+      }
+      return;
+    }
+
+    // Q&A 二级折叠
+    const qaHeader = e.target.closest(".qa-header");
+    if (qaHeader) {
+      qaHeader.parentElement.classList.toggle("collapsed");
+      saveExpandState();
+      return;
+    }
+
+    // 卡片一级折叠
+    const cardHeader = e.target.closest(".card-header");
+    if (cardHeader) {
+      cardHeader.parentElement.classList.toggle("collapsed");
+      saveExpandState();
+      return;
+    }
+  });
+}
+
+// ── 术语弹窗 ─────────────────────────────────────────
+
+function openTermModal(term, explanation, timestamp) {
+  $("#term-modal-name").textContent = term;
+  $("#term-modal-explanation").textContent = explanation;
+  $("#term-modal-answer").innerHTML = "";
+  $("#term-ask-input").value = "";
+  $("#term-modal-overlay").classList.remove("hidden");
+
+  const suggestions = $("#term-modal-suggestions");
+  suggestions.innerHTML = "";
+  suggestions.classList.remove("hidden");
+  const quickQs = [
+    `${term}是什么？能用大白话解释一下吗？`,
+    `${term}在实际中怎么用？`,
+    `${term}和视频里其他概念有什么关系？`,
+  ];
+  quickQs.forEach((q) => {
+    const btn = document.createElement("button");
+    btn.className = "suggestion-btn";
+    btn.textContent = q;
+    btn.addEventListener("click", () => {
+      $("#term-ask-input").value = q;
+      handleTermAsk();
+    });
+    suggestions.appendChild(btn);
+  });
+}
+
+function closeTermModal() {
+  $("#term-modal-overlay").classList.add("hidden");
+}
+
+async function handleTermAsk() {
+  const question = $("#term-ask-input").value.trim();
+  if (!question) return;
+
+  const term = $("#term-modal-name").textContent;
+  const explanation = $("#term-modal-explanation").textContent;
+  const answerEl = $("#term-modal-answer");
+
+  let timestamp = 0;
+  if (currentResult && currentResult.term_groups) {
+    for (const group of currentResult.term_groups) {
+      for (const t of group.terms) {
+        if (t.term === term) {
+          timestamp = t.timestamp;
+          break;
+        }
+      }
+    }
+  }
+
+  answerEl.innerHTML = '<div class="asking">思考中...</div>';
+  $("#term-ask-btn").disabled = true;
+  $("#term-modal-suggestions").classList.add("hidden");
+
+  const resp = await sendBg({
+    action: "askTerm",
+    data: { bvid: currentBvid, term, explanation, timestamp, question },
+  });
+
+  $("#term-ask-btn").disabled = false;
+
+  if (resp && resp.answer) {
+    answerEl.innerHTML = markdownToHtml(resp.answer);
+  } else {
+    answerEl.innerHTML =
+      '<div class="ask-error">回答失败，请重试。转录数据可能已过期，尝试重新分析。</div>';
+  }
+}
+
 // ── 辅助函数 ─────────────────────────────────────────
 
 async function sendBg(msg) {
-  // 统一包装，防止 Service Worker 未就绪时炸
   try {
     return await chrome.runtime.sendMessage(msg);
   } catch {
@@ -198,13 +523,8 @@ async function checkBackend() {
 
 async function getVideoInfo() {
   try {
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
-    if (!tab || !tab.url || !tab.url.includes("bilibili.com/video/")) {
-      return null;
-    }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url || !tab.url.includes("bilibili.com/video/")) return null;
     return await chrome.tabs.sendMessage(tab.id, { action: "getVideoInfo" });
   } catch {
     return null;
@@ -212,7 +532,7 @@ async function getVideoInfo() {
 }
 
 function showView(name) {
-  ["main", "progress", "error", "result"].forEach((v) => {
+  ["main", "analysis", "error"].forEach((v) => {
     $(`#${v}-view`).classList.toggle("hidden", v !== name);
   });
 }
@@ -234,40 +554,31 @@ function updateProgress(percent, text) {
   $("#progress-text").textContent = text;
 }
 
-function showPartialResult(result, statusMsg) {
-  // 在进度条下方显示中间结果预览
-  const container = $("#partial-preview");
-  if (!container) return;
-  container.classList.remove("hidden");
-  container.innerHTML =
-    `<div class="partial-status">${statusMsg}</div>` +
-    markdownToHtml(result.markdown);
+// ── 渲染辅助 ─────────────────────────────────────────
+
+function esc(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-function showResult(result) {
-  showView("result");
-  currentMarkdown = result.markdown;
-  currentTitle = result.video_title;
+function escBr(str) {
+  return esc(str).replace(/\n/g, "<br>");
+}
 
-  const preview = $("#result-preview");
-  preview.innerHTML = markdownToHtml(result.markdown);
-
-  // 时间戳链接 → 跳转视频位置
-  preview.querySelectorAll("a").forEach((a) => {
-    const href = a.getAttribute("href") || "";
-    const tMatch = href.match(/[?&]t=(\d+)/);
-    if (tMatch && href.includes("bilibili.com")) {
-      a.style.cursor = "pointer";
-      a.addEventListener("click", (e) => {
-        e.preventDefault();
-        // 通过 background 跳转，不依赖 popup 保持打开
-        sendBg({
-          action: "jumpToTime",
-          time: parseInt(tMatch[1]),
-        });
-      });
-    }
-  });
+function fmtTs(seconds, videoUrl) {
+  const t = Math.round(seconds);
+  const totalMm = Math.floor(t / 60);
+  const ss = t % 60;
+  const hh = Math.floor(totalMm / 60);
+  const mm = totalMm % 60;
+  const display = hh
+    ? `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
+    : `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  return `<a class="ts-link" data-time="${t}" href="${esc(videoUrl)}?t=${t}">${display}</a>`;
 }
 
 function markdownToHtml(md) {
@@ -277,8 +588,14 @@ function markdownToHtml(md) {
     .replace(/^# (.+)$/gm, "<h2>$1</h2>")
     .replace(/^> (.+)$/gm, "<blockquote>$1</blockquote>")
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/!\[(.+?)\]\((.+?)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:4px;margin:4px 0">')
-    .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" style="color:#00a1d6">$1</a>')
+    .replace(
+      /!\[(.+?)\]\((.+?)\)/g,
+      '<img src="$2" alt="$1" style="max-width:100%;border-radius:4px;margin:4px 0">'
+    )
+    .replace(
+      /\[(.+?)\]\((.+?)\)/g,
+      '<a href="$2" style="color:#00a1d6">$1</a>'
+    )
     .replace(/^- (.+)$/gm, "<li>$1</li>")
     .replace(/\n\n/g, "<br><br>")
     .replace(/\n/g, "<br>");

@@ -36,28 +36,32 @@ class AnalyzeRequest(BaseModel):
     bilibili_sessdata: Optional[str] = None
 
 
+class AskRequest(BaseModel):
+    bvid: str
+    term: str
+    explanation: str
+    timestamp: float
+    question: str
+
+
 # ── 分析结果子结构 ────────────────────────────────────
 
 class KeyTerm(BaseModel):
     term: str
     timestamp: float
-    context: str
+    explanation: str  # AI 生成的一句话解释（替代 ASR 原文 context）
 
 
-class GoldenQuote(BaseModel):
-    quote: str
+class TermGroup(BaseModel):
+    group_name: str  # 领域分类名，如"基础架构"、"核心创新"
+    terms: List[KeyTerm]
+
+
+class FlowNode(BaseModel):
+    """概念脉络节点 — 树状因果链的一个节点"""
+    label: str
     timestamp: float
-    speaker: Optional[str] = None
-
-
-class InstructionStep(BaseModel):
-    step_number: int
-    title: str
-    description: str
-    timestamp: float
-    needs_visual: bool = False
-    frame_path: Optional[str] = None
-    gif_path: Optional[str] = None
+    depth: int = 0  # 0=主线, 1=子节点
 
 
 class PracticalValue(BaseModel):
@@ -71,9 +75,9 @@ class QASection(BaseModel):
     question: str
     answer: str
     timestamp: float
-    quote: Optional[str] = None       # 值得单独展示的金句
-    sub_points: Optional[List[str]] = None  # 分步或要点列表
-    evidence: Optional[str] = None    # 数据/实验结果
+    quote: Optional[str] = None
+    sub_points: Optional[List[str]] = None
+    evidence: Optional[str] = None
 
 
 # ── 分析结果 ──────────────────────────────────────────
@@ -84,8 +88,11 @@ class AnalysisResult(BaseModel):
     bvid: str
     category: VideoCategory
     summary: str
+    title_hook: str = ""  # 标题好奇心问题（如"为何说文言文硬控全网大模型？"）
+    title_explanation: str = ""  # 标题解读答案
     practical_values: Optional[List[PracticalValue]] = None
-    key_terms: List[KeyTerm]
+    concept_flow: List[FlowNode] = []  # 概念脉络，树状因果链
+    term_groups: Optional[List[TermGroup]] = None
     qa_sections: Optional[List[QASection]] = None
     markdown: str = ""
 
@@ -94,7 +101,7 @@ class AnalysisResult(BaseModel):
 
 class TaskStatus(BaseModel):
     task_id: str
-    status: str = "pending"   # pending | transcribing | analyzing | extracting_frames | done | error
-    progress: int = 0         # 0-100
+    status: str = "pending"
+    progress: int = 0
     message: str = "排队中"
     result: Optional[AnalysisResult] = None

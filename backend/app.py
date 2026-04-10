@@ -5,8 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 import config
-from models import AnalyzeRequest
-from pipeline import get_task, run_pipeline
+from models import AnalyzeRequest, AskRequest
+from pipeline import get_task, get_transcript, run_pipeline
 
 app = FastAPI(title="Bili Analyzer")
 
@@ -37,6 +37,37 @@ async def task_status(task_id: str):
     if not task:
         return {"error": "task not found"}
     return task.model_dump()
+
+
+@app.post("/api/ask")
+async def ask_term(req: AskRequest):
+    segments = get_transcript(req.bvid)
+    if not segments:
+        return {"error": "该视频的转录数据已过期，请重新分析"}
+
+    # 从缓存的任务结果中获取视频标题
+    title = req.bvid
+    for task in _all_tasks():
+        if task.result and task.result.bvid == req.bvid:
+            title = task.result.video_title
+            break
+
+    from analyzer import ask_about_term
+    answer = await ask_about_term(
+        title=title,
+        term=req.term,
+        explanation=req.explanation,
+        timestamp=req.timestamp,
+        question=req.question,
+        segments=segments,
+    )
+    return {"answer": answer}
+
+
+def _all_tasks():
+    """遍历所有任务（辅助函数）"""
+    from pipeline import _tasks
+    return _tasks.values()
 
 
 if __name__ == "__main__":

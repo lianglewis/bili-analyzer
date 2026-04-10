@@ -22,6 +22,8 @@ async function handleMessage(request) {
       return getSessdata();
     case "jumpToTime":
       return jumpToTime(request.time);
+    case "askTerm":
+      return askTerm(request.data);
     default:
       return { error: `未知 action: ${request.action}` };
   }
@@ -72,6 +74,19 @@ async function startAnalysis(data) {
 async function checkTask(taskId) {
   try {
     const resp = await fetch(`${BACKEND}/api/task/${taskId}`);
+    return await resp.json();
+  } catch {
+    return { error: "无法连接后端" };
+  }
+}
+
+async function askTerm(data) {
+  try {
+    const resp = await fetch(`${BACKEND}/api/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
     return await resp.json();
   } catch {
     return { error: "无法连接后端" };
