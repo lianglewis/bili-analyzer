@@ -26,6 +26,17 @@
         </select>
       </div>
 
+      <div id="whisper-model-group" class="form-group hidden">
+        <label for="model-select">Whisper 模型</label>
+        <select id="model-select">
+          <option value="tiny">tiny（最快）</option>
+          <option value="base" selected>base（推荐）</option>
+          <option value="small">small（更准）</option>
+          <option value="medium">medium（高质量）</option>
+          <option value="large-v3">large-v3（最准）</option>
+        </select>
+      </div>
+
       <button id="btn-analyze" class="btn-primary" disabled>分析视频</button>
     </div>
 

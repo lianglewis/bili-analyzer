@@ -11,6 +11,7 @@ let currentMarkdown = "";
 let currentTitle = "";
 let currentBvid = "";
 let currentResult = null;
+let currentAudio = null;
 
 // 跟踪已渲染的卡片，避免重复创建
 let renderedCards = {};
@@ -18,10 +19,14 @@ let renderedCards = {};
 // ── 初始化 ───────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const settings = await chrome.storage.sync.get(["transcriptSource"]);
+  const settings = await chrome.storage.sync.get(["transcriptSource", "whisperModel"]);
   if (settings.transcriptSource) {
     $("#source-select").value = settings.transcriptSource;
   }
+  if (settings.whisperModel) {
+    $("#model-select").value = settings.whisperModel;
+  }
+  toggleWhisperModelUI($("#source-select").value);
 
   const backendOk = await checkBackend();
   if (!backendOk) {
@@ -67,6 +72,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   $("#source-select").addEventListener("change", (e) => {
     chrome.storage.sync.set({ transcriptSource: e.target.value });
+    toggleWhisperModelUI(e.target.value);
+  });
+
+  $("#model-select").addEventListener("change", (e) => {
+    chrome.storage.sync.set({ whisperModel: e.target.value });
   });
 
   // 事件委托：统一处理 analysis-preview 内的点击
@@ -87,11 +97,15 @@ async function handleAnalyze() {
 
   const { sessdata } = (await sendBg({ action: "getSessdata" })) || {};
 
+  const source = $("#source-select").value;
   const data = {
     url: videoInfo.url,
-    transcript_source: $("#source-select").value,
+    transcript_source: source,
     bilibili_sessdata: sessdata || null,
   };
+  if (source === "whisper_local") {
+    data.whisper_model = $("#model-select").value;
+  }
 
   showView("analysis");
   resetRenderedCards();
@@ -201,6 +215,7 @@ function appendCard(key, title, body, collapsed) {
   card.dataset.cardKey = key;
   card.innerHTML =
     `<div class="card-header"><span class="card-title">${title}</span>` +
+    `<span class="card-tts" data-card-key="${key}" title="播放语音">▶</span>` +
     `<span class="card-arrow">›</span></div>` +
     `<div class="card-body">${body}</div>`;
   container.appendChild(card);
@@ -362,11 +377,13 @@ function buildTermGroupsHtml(groups, videoUrl) {
 
 function buildQaSectionsHtml(sections, videoUrl) {
   let h = "";
-  for (const qa of sections) {
+  for (let i = 0; i < sections.length; i++) {
+    const qa = sections[i];
     h += `<div class="qa-item collapsed">`;
     h += `<div class="qa-header">`;
     h += `<span class="qa-q">${esc(qa.question)}</span>`;
     h += `<span class="qa-meta">${fmtTs(qa.timestamp, videoUrl)}`;
+    h += `<span class="qa-tts" data-qa-idx="${i}" title="播放语音">▶</span>`;
     h += `<span class="sub-arrow">›</span></span></div>`;
     h += `<div class="qa-body">`;
     h += `<div class="qa-a">${escBr(qa.answer)}</div>`;
@@ -393,6 +410,14 @@ function setupCardContainer() {
   if (!preview) return;
 
   preview.addEventListener("click", (e) => {
+    // TTS 播放
+    const ttsBtn = e.target.closest(".card-tts");
+    if (ttsBtn) {
+      e.stopPropagation();
+      handleTtsClick(ttsBtn);
+      return;
+    }
+
     // 时间戳跳转
     const tsLink = e.target.closest(".ts-link");
     if (tsLink) {
@@ -413,6 +438,15 @@ function setupCardContainer() {
           }
         }
       }
+      return;
+    }
+
+    // QA 子项 TTS 播放
+    const qaTts = e.target.closest(".qa-tts");
+    if (qaTts) {
+      e.stopPropagation();
+      const idx = parseInt(qaTts.dataset.qaIdx);
+      handleQaTtsClick(qaTts, idx);
       return;
     }
 
@@ -579,6 +613,118 @@ function fmtTs(seconds, videoUrl) {
     ? `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
     : `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
   return `<a class="ts-link" data-time="${t}" href="${esc(videoUrl)}?t=${t}">${display}</a>`;
+}
+
+function toggleWhisperModelUI(source) {
+  const group = $("#whisper-model-group");
+  if (source === "whisper_local") {
+    group.classList.remove("hidden");
+  } else {
+    group.classList.add("hidden");
+  }
+}
+
+// ── TTS 播放 ──────────────────────────────────────────
+
+function getCardText(key) {
+  const r = currentResult;
+  if (!r) return "";
+
+  if (key === "title_explain") {
+    return (r.title_hook || "") + "\n" + (r.title_explanation || "");
+  }
+  if (key === "summary") {
+    return r.summary || "";
+  }
+  if (key === "pv" && r.practical_values) {
+    return r.practical_values.map((pv) => pv.point + "：" + pv.detail).join("\n");
+  }
+  if (key === "flow" && r.concept_flow) {
+    if (typeof r.concept_flow === "string") return r.concept_flow;
+    if (Array.isArray(r.concept_flow)) {
+      return r.concept_flow.map((n) => n.label).join("，");
+    }
+  }
+  if (key === "terms" && r.term_groups) {
+    return r.term_groups
+      .map((g) =>
+        g.group_name +
+        "：" +
+        g.terms.map((t) => t.term + "，" + t.explanation).join("；")
+      )
+      .join("\n");
+  }
+  if (key === "qa" && r.qa_sections) {
+    return r.qa_sections
+      .map((qa) => "问：" + qa.question + "\n答：" + qa.answer)
+      .join("\n");
+  }
+  return "";
+}
+
+function stopCurrentAudio() {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+  }
+  document.querySelectorAll(".card-tts, .qa-tts").forEach((b) => (b.textContent = "\u25B6"));
+}
+
+async function playTts(btn, text) {
+  if (!text) return;
+
+  // 正在播放时点击 = 停止
+  if (currentAudio && btn.textContent === "\u23F9") {
+    stopCurrentAudio();
+    return;
+  }
+
+  stopCurrentAudio();
+  btn.textContent = "\u23F3";
+
+  try {
+    const resp = await fetch("http://127.0.0.1:8765/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!resp.ok) throw new Error("TTS failed");
+
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+
+    audio.addEventListener("ended", () => {
+      btn.textContent = "\u25B6";
+      currentAudio = null;
+      URL.revokeObjectURL(url);
+    });
+    audio.addEventListener("error", () => {
+      btn.textContent = "\u25B6";
+      currentAudio = null;
+      URL.revokeObjectURL(url);
+    });
+
+    currentAudio = audio;
+    btn.textContent = "\u23F9";
+    await audio.play();
+  } catch {
+    btn.textContent = "\u25B6";
+    currentAudio = null;
+  }
+}
+
+function handleQaTtsClick(btn, idx) {
+  if (!currentResult || !currentResult.qa_sections) return;
+  const qa = currentResult.qa_sections[idx];
+  if (!qa) return;
+  const text = "问：" + qa.question + "\n答：" + qa.answer;
+  playTts(btn, text);
+}
+
+function handleTtsClick(btn) {
+  const text = getCardText(btn.dataset.cardKey);
+  playTts(btn, text);
 }
 
 function markdownToHtml(md) {

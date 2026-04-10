@@ -34,6 +34,7 @@ class AnalyzeRequest(BaseModel):
     url: str
     transcript_source: TranscriptSource = TranscriptSource.BILIBILI_API
     bilibili_sessdata: Optional[str] = None
+    whisper_model: Optional[str] = None
 
 
 class AskRequest(BaseModel):

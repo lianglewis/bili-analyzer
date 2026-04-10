@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 import config
@@ -62,6 +63,16 @@ async def ask_term(req: AskRequest):
         segments=segments,
     )
     return {"answer": answer}
+
+
+@app.post("/api/tts")
+async def text_to_speech(req: dict):
+    text = req.get("text", "").strip()
+    if not text:
+        return {"error": "text is empty"}
+    from tts import synthesize
+    audio = await synthesize(text)
+    return Response(content=audio, media_type="audio/mpeg")
 
 
 def _all_tasks():

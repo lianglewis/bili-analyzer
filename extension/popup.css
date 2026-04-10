@@ -182,13 +182,14 @@ h1 {
 .card-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   padding: 10px 12px;
   cursor: pointer;
   user-select: none;
 }
 .card-header:active { background: #f5f5f5; }
 .card-title {
+  flex: 1;
   font-size: 13px;
   font-weight: 600;
   color: #333;
@@ -501,6 +502,30 @@ h1 {
   color: #c62828;
   text-align: center;
   padding: 12px;
+}
+
+/* ── TTS 播放按钮 ── */
+.card-tts {
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #00a1d6;
+  transition: background 0.15s;
+  user-select: none;
+}
+.card-tts:hover,
+.qa-tts:hover {
+  background: #e3f2fd;
+}
+.qa-tts {
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: #00a1d6;
+  transition: background 0.15s;
+  user-select: none;
 }
 
 .hidden {

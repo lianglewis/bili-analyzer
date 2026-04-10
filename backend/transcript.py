@@ -1,7 +1,11 @@
 """转录获取 — 三种方式统一为 list[TextSegment]"""
 
+import asyncio
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 from typing import List, Optional
 
 import httpx
@@ -20,7 +24,7 @@ async def get_transcript(
     if req.transcript_source == TranscriptSource.BILIBILI_API:
         return await _get_bilibili_subtitle(bvid, req.bilibili_sessdata)
     elif req.transcript_source == TranscriptSource.WHISPER_LOCAL:
-        return await _get_whisper_local(req.url, bvid)
+        return await _get_whisper_local(req.url, bvid, req.bilibili_sessdata, req.whisper_model)
     elif req.transcript_source == TranscriptSource.CLOUD_API:
         raise NotImplementedError("云端 ASR 将在后续版本实现")
     raise ValueError(f"未知转录方式: {req.transcript_source}")
@@ -98,47 +102,83 @@ async def _get_bilibili_subtitle(
 
 # ── 方式二：本地 Whisper ──────────────────────────────
 
-async def _get_whisper_local(url: str, bvid: str) -> List[TextSegment]:
+async def _get_whisper_local(
+    url: str,
+    bvid: str,
+    sessdata: Optional[str] = None,
+    whisper_model: Optional[str] = None,
+) -> List[TextSegment]:
     import config
 
-    audio_path = f"{config.OUTPUT_DIR}/{bvid}.m4a"
+    # 0. 检测 yt-dlp 是否可用
+    if not shutil.which("yt-dlp"):
+        raise RuntimeError(
+            "yt-dlp 未安装。请运行: brew install yt-dlp"
+        )
 
-    # 1. yt-dlp 下载音频
-    proc = subprocess.run(
-        [
+    audio_path = f"{config.OUTPUT_DIR}/{bvid}.m4a"
+    cookie_file = None
+
+    try:
+        # 1. 构建 yt-dlp 命令
+        cmd = [
             "yt-dlp",
             "-f", "bestaudio",
             "-o", audio_path,
             "--no-playlist",
             "--no-overwrites",
             url,
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"yt-dlp 下载音频失败: {proc.stderr[:500]}")
+        ]
 
-    # 2. Whisper 转录
-    try:
-        import whisper
-    except ImportError:
-        raise RuntimeError(
-            "Whisper 未安装。请运行: pip install openai-whisper"
+        # SESSDATA → Netscape cookies 文件给 yt-dlp
+        if sessdata:
+            cookie_file = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False
+            )
+            cookie_file.write(
+                "# Netscape HTTP Cookie File\n"
+                f".bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\t{sessdata}\n"
+            )
+            cookie_file.close()
+            cmd[1:1] = ["--cookies", cookie_file.name]
+
+        # 异步执行 yt-dlp，不阻塞事件循环
+        proc = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"yt-dlp 下载音频失败: {proc.stderr[:500]}")
+
+        # 2. Whisper 转录
+        try:
+            import whisper
+        except ImportError:
+            raise RuntimeError(
+                "Whisper 未安装。请运行: pip3 install openai-whisper"
+            )
+
+        model_name = whisper_model or config.WHISPER_MODEL
+        model = await asyncio.to_thread(whisper.load_model, model_name)
+        result = await asyncio.to_thread(
+            model.transcribe, audio_path, language="zh"
         )
 
-    model = whisper.load_model(config.WHISPER_MODEL)
-    result = model.transcribe(audio_path, language="zh")
-
-    return [
-        TextSegment(
-            start=seg["start"],
-            end=seg["end"],
-            text=seg["text"].strip(),
-        )
-        for seg in result["segments"]
-        if seg["text"].strip()
-    ]
+        return [
+            TextSegment(
+                start=seg["start"],
+                end=seg["end"],
+                text=seg["text"].strip(),
+            )
+            for seg in result["segments"]
+            if seg["text"].strip()
+        ]
+    finally:
+        # 清理临时 cookie 文件
+        if cookie_file and os.path.exists(cookie_file.name):
+            os.remove(cookie_file.name)
+        # 清理下载的音频文件
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
 
 
 # ── 视频信息 ──────────────────────────────────────────
