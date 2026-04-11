@@ -21,8 +21,17 @@ BILIBILI_HEADERS = {
 async def get_transcript(
     req: AnalyzeRequest, bvid: str
 ) -> List[TextSegment]:
+    # 无论用户选什么，先尝试 B站字幕API（快且稳定）
+    try:
+        segments = await _get_bilibili_subtitle(bvid, req.bilibili_sessdata)
+        if segments:
+            return segments
+    except Exception:
+        pass  # 没字幕就走用户选的方式
+
     if req.transcript_source == TranscriptSource.BILIBILI_API:
-        return await _get_bilibili_subtitle(bvid, req.bilibili_sessdata)
+        # 用户明确选了 Bilibili API 但没字幕，给明确提示
+        raise ValueError("该视频没有字幕。请尝试切换到 Whisper 本地转录。")
     elif req.transcript_source == TranscriptSource.WHISPER_LOCAL:
         return await _get_whisper_local(req.url, bvid, req.bilibili_sessdata, req.whisper_model)
     elif req.transcript_source == TranscriptSource.CLOUD_API:
@@ -127,6 +136,7 @@ async def _get_whisper_local(
             "-o", audio_path,
             "--no-playlist",
             "--no-overwrites",
+            "--no-check-certificates",
             url,
         ]
 
@@ -184,8 +194,8 @@ async def _get_whisper_local(
 # ── 视频信息 ──────────────────────────────────────────
 
 
-async def get_video_title(bvid: str) -> str:
-    """获取视频标题"""
+async def get_video_info(bvid: str) -> dict:
+    """获取视频标题和封面，返回 {"title": str, "pic": str}"""
     async with httpx.AsyncClient(headers=BILIBILI_HEADERS) as client:
         resp = await client.get(
             "https://api.bilibili.com/x/web-interface/view",
@@ -194,8 +204,15 @@ async def get_video_title(bvid: str) -> str:
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") != 0:
-            return ""
-        return data["data"].get("title", "")
+            return {"title": "", "pic": ""}
+        d = data["data"]
+        return {"title": d.get("title", ""), "pic": d.get("pic", "")}
+
+
+async def get_video_title(bvid: str) -> str:
+    """获取视频标题（向后兼容 wrapper）"""
+    info = await get_video_info(bvid)
+    return info["title"]
 
 
 # ── 工具函数 ──────────────────────────────────────────

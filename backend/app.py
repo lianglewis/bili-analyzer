@@ -1,4 +1,4 @@
-"""FastAPI 入口 — 4 个端点，多一个都是过度设计"""
+"""FastAPI 入口 — 核心端点 + 笔记管理"""
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,10 +6,13 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 import config
+from db import init_db, list_notes, get_note, delete_note
 from models import AnalyzeRequest, AskRequest
 from pipeline import get_task, get_transcript, run_pipeline
 
 app = FastAPI(title="Bili Analyzer")
+
+init_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,6 +76,25 @@ async def text_to_speech(req: dict):
     from tts import synthesize
     audio = await synthesize(text)
     return Response(content=audio, media_type="audio/mpeg")
+
+
+@app.get("/api/notes")
+async def notes_list():
+    return list_notes()
+
+
+@app.get("/api/notes/{bvid}")
+async def notes_detail(bvid: str):
+    note = get_note(bvid)
+    if not note:
+        return {"error": "note not found"}
+    return note
+
+
+@app.delete("/api/notes/{bvid}")
+async def notes_delete(bvid: str):
+    ok = delete_note(bvid)
+    return {"deleted": ok}
 
 
 def _all_tasks():

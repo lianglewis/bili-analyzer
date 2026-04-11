@@ -87,6 +87,7 @@ class AnalysisResult(BaseModel):
     video_title: str
     video_url: str
     bvid: str
+    cover_url: Optional[str] = None
     category: VideoCategory
     summary: str
     title_hook: str = ""  # 标题好奇心问题（如"为何说文言文硬控全网大模型？"）

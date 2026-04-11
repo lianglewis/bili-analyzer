@@ -49,7 +49,7 @@ def _extract_bvid(url: str) -> str:
 
 
 def _build_result(title, url, bvid, first_pass=None, qa_sections=None,
-                   title_hook="", title_explanation=""):
+                   title_hook="", title_explanation="", cover_url=""):
     """构建（可能不完整的）AnalysisResult"""
     from note import generate_markdown
 
@@ -57,6 +57,7 @@ def _build_result(title, url, bvid, first_pass=None, qa_sections=None,
         video_title=title,
         video_url=url,
         bvid=bvid,
+        cover_url=cover_url or None,
         category=first_pass["category"] if first_pass else VideoCategory.KNOWLEDGE,
         summary=first_pass["summary"] if first_pass else "",
         title_hook=title_hook,
@@ -73,6 +74,7 @@ def _build_result(title, url, bvid, first_pass=None, qa_sections=None,
 async def _process(task_id: str, req: AnalyzeRequest):
     task = _tasks[task_id]
     title = ""
+    cover_url = ""
     title_hook = ""
     title_explanation = ""
     first_pass = None
@@ -81,10 +83,12 @@ async def _process(task_id: str, req: AnalyzeRequest):
     try:
         bvid = _extract_bvid(req.url)
 
-        # ── Step 0: 视频标题 ──
+        # ── Step 0: 视频标题 + 封面 ──
         _update(task, "transcribing", 5, "获取视频信息...")
-        from transcript import get_video_title
-        title = await get_video_title(bvid)
+        from transcript import get_video_info
+        info = await get_video_info(bvid)
+        title = info["title"]
+        cover_url = info["pic"]
 
         # ── Step 1: 转录 ──
         _update(task, "transcribing", 10, "获取转录文本...")
@@ -105,7 +109,8 @@ async def _process(task_id: str, req: AnalyzeRequest):
         title_explanation = title_info.get("answer", "")
         task.result = _build_result(
             title, req.url, bvid,
-            title_hook=title_hook, title_explanation=title_explanation
+            title_hook=title_hook, title_explanation=title_explanation,
+            cover_url=cover_url
         )
         _update(task, "analyzing", 28, "标题解读完成，AI 深度分析中...")
 
@@ -123,7 +128,8 @@ async def _process(task_id: str, req: AnalyzeRequest):
                 f"识别为「{cat_cn}」视频，深度提取中...")
         task.result = _build_result(
             title, req.url, bvid, first_pass,
-            title_hook=title_hook, title_explanation=title_explanation
+            title_hook=title_hook, title_explanation=title_explanation,
+            cover_url=cover_url
         )
 
         # ── Step 3: 第二轮 — Q&A 深度提取 ──
@@ -132,16 +138,26 @@ async def _process(task_id: str, req: AnalyzeRequest):
         qa_sections = await extract_qa_sections(segments, first_pass["category"])
         task.result = _build_result(
             title, req.url, bvid, first_pass, qa_sections,
-            title_hook=title_hook, title_explanation=title_explanation
+            title_hook=title_hook, title_explanation=title_explanation,
+            cover_url=cover_url
         )
         _update(task, "analyzing", 90, "深度提取完成，生成笔记...")
 
-        # ── Step 4: 最终结果 ──
+        # ── Step 4: 最终结果 + 持久化 ──
         _update(task, "analyzing", 95, "生成最终笔记...")
         task.result = _build_result(
             title, req.url, bvid, first_pass, qa_sections,
-            title_hook=title_hook, title_explanation=title_explanation
+            title_hook=title_hook, title_explanation=title_explanation,
+            cover_url=cover_url
         )
+
+        # 写入 SQLite
+        from db import save_note
+        try:
+            save_note(task.result.model_dump())
+        except Exception:
+            pass  # 持久化失败不影响主流程
+
         _update(task, "done", 100, "分析完成")
 
     except Exception as e:
@@ -151,7 +167,7 @@ async def _process(task_id: str, req: AnalyzeRequest):
             try:
                 task.result = _build_result(
                     title, req.url, bvid, first_pass, qa_sections,
-                    title_explanation=title_explanation
+                    title_explanation=title_explanation, cover_url=cover_url
                 )
             except Exception:
                 pass

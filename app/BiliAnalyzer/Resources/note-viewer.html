@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="note-viewer.css">
+</head>
+<body>
+  <div id="analysis-preview"></div>
+
+  <!-- 术语追问弹窗 -->
+  <div id="term-modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="term-modal-name"></h3>
+        <button id="term-modal-close" class="modal-close-btn">&times;</button>
+      </div>
+      <p id="term-modal-explanation" class="modal-explanation"></p>
+      <div id="term-modal-suggestions" class="modal-suggestions"></div>
+      <div class="modal-ask-row">
+        <input id="term-ask-input" type="text" placeholder="输入你的问题..." class="modal-input">
+        <button id="term-ask-btn" class="modal-ask-btn">问</button>
+      </div>
+      <div id="term-modal-answer" class="modal-answer"></div>
+    </div>
+  </div>
+
+  <script src="note-viewer.js"></script>
+</body>
+</html>
