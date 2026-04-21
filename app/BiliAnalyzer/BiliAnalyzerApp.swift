@@ -12,5 +12,9 @@ struct BiliAnalyzerApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1200, height: 700)
+
+        Settings {
+            SettingsView()
+        }
     }
 }

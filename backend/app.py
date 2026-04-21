@@ -29,6 +29,17 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/api/config")
+async def config_get():
+    return config.get_all()
+
+
+@app.post("/api/config")
+async def config_update(body: dict):
+    config.update(body)
+    return config.get_all()
+
+
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
     task_id = await run_pipeline(req)

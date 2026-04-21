@@ -11,7 +11,6 @@ from pydantic import BaseModel
 class TranscriptSource(str, Enum):
     BILIBILI_API = "bilibili_api"
     WHISPER_LOCAL = "whisper_local"
-    CLOUD_API = "cloud_api"
 
 
 class VideoCategory(str, Enum):

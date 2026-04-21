@@ -25,6 +25,7 @@
 		FCCBA0E300B360523399D5EA /* note-viewer.css in Resources */ = {isa = PBXBuildFile; fileRef = 57C6D62F599ED0427E630AFB /* note-viewer.css */; };
 		FCFBDD5A953A03673B3E0D1F /* note-viewer.js in Resources */ = {isa = PBXBuildFile; fileRef = C5197CB6C5C52FA2B873A91B /* note-viewer.js */; };
 		FD2FC7233B0B0E033EC0863D /* NoteDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C84D1CE5F8AD426C5290F332 /* NoteDetailView.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6E7F8091A2B3C4D5E6F7081 /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +49,7 @@
 		F58A507FA88391E1FE5FD84A /* BiliAnalyzerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiliAnalyzerApp.swift; sourceTree = "<group>"; };
 		F90BF5F01035A1B5CB6CFD0F /* NoteDetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDetailViewModel.swift; sourceTree = "<group>"; };
 		FDE97B6AB9A1AA9EBBD6A027 /* VideoPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlayerView.swift; sourceTree = "<group>"; };
+		D6E7F8091A2B3C4D5E6F7081 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -77,6 +79,7 @@
 				C84D1CE5F8AD426C5290F332 /* NoteDetailView.swift */,
 				6DC2CD4348A833AB9D0F0661 /* NoteListView.swift */,
 				33385125EA3CE46C27EE226C /* NoteWebView.swift */,
+				D6E7F8091A2B3C4D5E6F7081 /* SettingsView.swift */,
 				FDE97B6AB9A1AA9EBBD6A027 /* VideoPlayerView.swift */,
 			);
 			path = Views;
@@ -219,6 +222,7 @@
 				99375C7FFC1F2D3130FB228E /* NoteListView.swift in Sources */,
 				C7A927E68AED0AE542BF15C1 /* NoteListViewModel.swift in Sources */,
 				E0D0336817450D65DF693C54 /* NoteWebView.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* SettingsView.swift in Sources */,
 				DCD068954D5AD4EFD61A6103 /* VideoPlayerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

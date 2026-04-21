@@ -25,7 +25,7 @@ from transcript import format_transcript
 async def _call_claude(system: str, user: str, max_tokens: int = 4096) -> str:
     """调用 Claude API，带重试（覆盖超时、断连、限流）"""
     if not config.CLAUDE_API_KEY:
-        raise ValueError("未设置 CLAUDE_API_KEY 环境变量")
+        raise ValueError("未设置 CLAUDE_API_KEY，请在 App 设置 (Cmd+,) 中填写")
 
     last_err = None
     for attempt in range(4):
@@ -46,7 +46,7 @@ async def _call_claude(system: str, user: str, max_tokens: int = 4096) -> str:
                     },
                 )
                 if resp.status_code == 401:
-                    raise ValueError("Claude API Key 无效，请检查 CLAUDE_API_KEY 环境变量")
+                    raise ValueError("Claude API Key 无效，请在 App 设置 (Cmd+,) 中检查")
                 if resp.status_code == 429 and attempt < 3:
                     wait = 2 ** (attempt + 1)
                     print(f"[Claude] 限流，{wait}秒后重试...")
@@ -54,7 +54,14 @@ async def _call_claude(system: str, user: str, max_tokens: int = 4096) -> str:
                     continue
                 resp.raise_for_status()
                 data = resp.json()
-                return data["content"][0]["text"]
+                # 遍历 content blocks，取第一个 text 块
+                # （跳过 thinking / tool_use 等非文本块）
+                for block in data.get("content", []):
+                    if isinstance(block, dict) and "text" in block:
+                        return block["text"]
+                raise ValueError(
+                    f"Claude API 返回无文本内容: {str(data)[:300]}"
+                )
         except (httpx.TimeoutException, httpx.RemoteProtocolError, httpx.ConnectError) as e:
             last_err = e
             if attempt < 3:

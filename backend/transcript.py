@@ -34,8 +34,6 @@ async def get_transcript(
         raise ValueError("该视频没有字幕。请尝试切换到 Whisper 本地转录。")
     elif req.transcript_source == TranscriptSource.WHISPER_LOCAL:
         return await _get_whisper_local(req.url, bvid, req.bilibili_sessdata, req.whisper_model)
-    elif req.transcript_source == TranscriptSource.CLOUD_API:
-        raise NotImplementedError("云端 ASR 将在后续版本实现")
     raise ValueError(f"未知转录方式: {req.transcript_source}")
 
 
