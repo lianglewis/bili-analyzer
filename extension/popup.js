@@ -12,6 +12,7 @@ let currentTitle = "";
 let currentBvid = "";
 let currentResult = null;
 let currentAudio = null;
+let forceNextAnalysis = false;
 
 // 跟踪已渲染的卡片，避免重复创建
 let renderedCards = {};
@@ -102,7 +103,9 @@ async function handleAnalyze() {
     url: videoInfo.url,
     transcript_source: source,
     bilibili_sessdata: sessdata || null,
+    force: forceNextAnalysis,
   };
+  forceNextAnalysis = false;
   if (source === "whisper_local") {
     data.whisper_model = $("#model-select").value;
   }
@@ -174,6 +177,7 @@ async function handleReanalyze() {
   if (currentBvid) {
     await chrome.storage.local.remove(`result_${currentBvid}`);
   }
+  forceNextAnalysis = true;
   showView("main");
 }
 

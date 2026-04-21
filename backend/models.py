@@ -34,6 +34,7 @@ class AnalyzeRequest(BaseModel):
     transcript_source: TranscriptSource = TranscriptSource.BILIBILI_API
     bilibili_sessdata: Optional[str] = None
     whisper_model: Optional[str] = None
+    force: bool = False  # True 时跳过缓存，强制重新分析
 
 
 class AskRequest(BaseModel):

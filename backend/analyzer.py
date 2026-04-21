@@ -1,4 +1,4 @@
-"""Claude API 分析 — 两轮调用，先分类再分支"""
+"""Claude API 分析 — 单轮调用，分类+深度提取一次完成"""
 
 import asyncio
 import json
@@ -136,14 +136,16 @@ def _parse_json(text: str) -> dict:
         raise ValueError(f"Claude 返回的 JSON 格式异常: {e}")
 
 
-# ── 第一轮：分类 + 摘要 + 分组术语 + 概念脉络 ────────
+# ── 单轮完整分析：分类 + 摘要 + 术语 + 脉络 + QA ────
 
-SYSTEM_FIRST_PASS = (
-    "你是一个视频内容分析专家。分析视频转录文本，返回 JSON 格式结果。"
-    "不要输出 JSON 以外的任何内容。"
+SYSTEM_FULL = (
+    "你是一个视频内容分析专家。深度分析视频转录文本，一次性完成分类、结构提取和问答深度分析。"
+    "只返回 JSON，不要输出任何其他内容。"
 )
 
-USER_FIRST_PASS = """分析以下视频转录文本：
+USER_FULL = """深度分析以下视频转录文本，一次性完成全部任务。
+
+## 任务一：分类 + 摘要 + 结构提取
 
 1. 视频分类（三选一）：
    - entertainment：娱乐/访谈/搞笑/vlog/脱口秀/生活分享
@@ -152,45 +154,57 @@ USER_FIRST_PASS = """分析以下视频转录文本：
 
 2. 100 字以内的中文摘要
 
-3. 2-4 条"实用价值"：这个视频的信息对观众有什么用？可以用在哪里？
+3. 2-4 条"实用价值"：这个视频的信息对观众有什么用？
 
 4. **概念脉络**（树状结构）：用 5-8 个节点串起视频的核心逻辑。
-   - depth=0 表示主线节点，depth=1 表示对上一个主线的补充/子论点
+   - depth=0 表示主线节点，depth=1 表示子论点
    - timestamp 使用 | 后面的秒数值
    示例：
    [
      {{"label": "残差连接是10年标准", "timestamp": 30.0, "depth": 0}},
      {{"label": "存在两个核心缺陷", "timestamp": 85.0, "depth": 1}},
-     {{"label": "类比RNN的解决思路", "timestamp": 150.0, "depth": 0}},
-     {{"label": "注意力机制迁移到深度维度", "timestamp": 210.0, "depth": 0}},
-     {{"label": "分块策略降低计算量", "timestamp": 305.0, "depth": 1}},
-     {{"label": "实测多项SOTA提升", "timestamp": 420.0, "depth": 0}}
+     {{"label": "类比RNN的解决思路", "timestamp": 150.0, "depth": 0}}
    ]
 
-5. **分组关键术语**：将 5-15 个关键术语按领域分组。每个术语需要：
-   - term：修正后的正确名称（修正 ASR 错误，如 "WESNET"→"ResNet"）
+5. **分组关键术语**：将 5-15 个关键术语按领域分组。
+   - term：修正 ASR 错误后的正确名称
    - timestamp：首次出现的精确秒数
-   - explanation：一句话解释这个术语在本视频语境下的含义（不是字典定义，而是在这个视频里它代表什么）
+   - explanation：一句话解释该术语在本视频语境下的含义
+   - 分组名简短（2-4字）
 
-注意：
-- 转录每一行格式为 [MM:SS | Ns]，其中 N 是精确秒数。timestamp **直接使用 | 后面的秒数值**，不要自行计算。
-- 分组名要简短（2-4个字），如"基础架构"、"核心创新"、"实验评测"、"人物/团队"
+## 任务二：问答式深度提取（4-8 个问题）
+
+根据你的分类结果，选择对应风格：
+
+**entertainment：** 他们在聊什么？最颠覆认知的观点？最精彩的一句话？有争议吗？
+→ 金句放 quote 字段
+
+**tutorial：** 最终效果？需要准备什么？核心操作步骤？容易踩的坑？
+→ 步骤/清单用 sub_points 字段
+
+**knowledge：** 要解决什么问题？核心方法/原理？有什么证据？优势？局限性？
+→ 实验数据放 evidence 字段
+
+## 通用规则
+- 转录格式 [MM:SS | Ns]，timestamp **直接用 | 后面的秒数**
+- 问题要像好奇的观众会问的，自然、口语化
+- 回答完整准确，2-4 句话讲清楚
+- **修正明显的 ASR 错误**，保持原意
 
 视频标题：{title}
 
 转录文本：
 {transcript}
 
-返回 JSON：
+返回 JSON（严格遵循此结构）：
 {{
-  "category": "entertainment" 或 "tutorial" 或 "knowledge",
-  "summary": "摘要",
+  "category": "entertainment 或 tutorial 或 knowledge",
+  "summary": "100字摘要",
   "practical_values": [
     {{"point": "用途", "detail": "展开说明"}}
   ],
   "concept_flow": [
-    {{"label": "节点描述", "timestamp": 30.0, "depth": 0}},
-    {{"label": "子节点", "timestamp": 60.0, "depth": 1}}
+    {{"label": "节点描述", "timestamp": 30.0, "depth": 0}}
   ],
   "term_groups": [
     {{
@@ -199,22 +213,34 @@ USER_FIRST_PASS = """分析以下视频转录文本：
         {{"term": "术语名", "timestamp": 205.0, "explanation": "一句话解释"}}
       ]
     }}
+  ],
+  "qa_sections": [
+    {{
+      "question": "观众会问的问题？",
+      "answer": "完整的回答",
+      "timestamp": 120.0,
+      "quote": "值得展示的原话 或 null",
+      "sub_points": ["要点1", "要点2"],
+      "evidence": "实验数据 或 null"
+    }}
   ]
 }}"""
 
 
-async def analyze_first_pass(
+async def analyze_full(
     segments: List[TextSegment], title: str
 ) -> Dict:
+    """单次 Claude 调用完成全部分析（分类+摘要+术语+脉络+QA）"""
     transcript_text = format_transcript(segments)
-    prompt = USER_FIRST_PASS.format(title=title, transcript=transcript_text)
-    raw = await _call_claude(SYSTEM_FIRST_PASS, prompt)
+    prompt = USER_FULL.format(title=title, transcript=transcript_text)
+    raw = await _call_claude(SYSTEM_FULL, prompt, max_tokens=8192)
     data = _parse_json(raw)
 
     cat_str = data["category"]
     if cat_str == "educational":
         cat_str = "tutorial"
 
+    # 解析术语分组
     term_groups = []
     for g in data.get("term_groups", []):
         terms = [
@@ -223,11 +249,11 @@ async def analyze_first_pass(
                 timestamp=float(t["timestamp"]),
                 explanation=t["explanation"],
             )
-            for t in g["terms"]
+            for t in g.get("terms", [])
         ]
         term_groups.append(TermGroup(group_name=g["group_name"], terms=terms))
 
-    # 解析概念脉络：优先树状数组，兼容旧版字符串
+    # 解析概念脉络
     raw_flow = data.get("concept_flow", [])
     if isinstance(raw_flow, list):
         concept_flow = [
@@ -240,111 +266,14 @@ async def analyze_first_pass(
             if isinstance(n, dict) and n.get("label")
         ]
     else:
-        # Claude 返回了字符串，拆成单层节点
         concept_flow = [
             FlowNode(label=part.strip(), timestamp=0, depth=0)
             for part in str(raw_flow).split("→")
             if part.strip()
         ]
 
-    return {
-        "title": title,
-        "category": VideoCategory(cat_str),
-        "summary": data["summary"],
-        "practical_values": [
-            PracticalValue(point=p["point"], detail=p["detail"])
-            for p in data.get("practical_values", [])
-        ],
-        "concept_flow": concept_flow,
-        "term_groups": term_groups,
-    }
-
-
-# ── 第二轮：问答式深度提取（统一三类）──────────────
-
-SYSTEM_QA = (
-    "你是一个视频内容深度分析专家。用问答结构提炼视频核心内容。"
-    "返回 JSON 格式，不要输出其他内容。"
-)
-
-_QA_GUIDE = {
-    "entertainment": """这是一个娱乐/访谈/脱口秀类视频。请用 4-8 个问题梳理内容。
-问题风格参考（不必全用，根据内容选择）：
-- "他们在聊什么？"（主题概述）
-- "最颠覆认知的观点是什么？"
-- "最精彩的一句话是什么？"（quote 字段放原话）
-- "有什么争议或分歧？"
-- "结论是什么？"
-
-每个回答里如果有值得单独展示的金句，放到 quote 字段。""",
-
-    "tutorial": """这是一个动手教程类视频。请用 4-8 个问题梳理内容。
-问题风格参考（不必全用，根据内容选择）：
-- "最终要实现什么效果？"
-- "需要准备什么工具/材料？"（sub_points 列出清单）
-- "核心操作步骤是什么？"（sub_points 列出分步）
-- "有什么容易踩的坑？"
-- "怎么验证做对了？"
-
-操作步骤类的回答用 sub_points 列出分步要点。""",
-
-    "knowledge": """这是一个知识讲解/论文解读/科普类视频。请用 4-8 个问题梳理内容。
-问题风格参考（不必全用，根据内容选择）：
-- "这个研究/话题要解决什么问题？"
-- "核心方法/原理是什么？"
-- "有什么证据或实验数据支撑？"（evidence 字段放数据）
-- "和现有方案相比优势在哪？"
-- "有什么局限性？"
-- "这意味着什么？对未来有什么影响？"
-
-有实验数据的放到 evidence 字段。""",
-}
-
-USER_QA = """以下是一个视频的转录文本，请用**问答结构**提炼核心内容。
-
-{category_guide}
-
-规则：
-- 问题要像一个好奇的观众会问的，自然、口语化、有吸引力
-- 回答要完整、准确，2-4 句话把这个点讲清楚
-- 转录来自语音识别，回答中请**修正明显的 ASR 错误**（错别字、专有名词），但保持原意
-- 转录每一行格式为 [MM:SS | Ns]，N 是精确秒数。timestamp **直接使用 | 后面的秒数值**，不要自行计算
-- quote 字段：该问答中最值得单独展示的一句原话（修正 ASR 错误后），没有则为 null
-- sub_points 字段：需要列出要点/步骤时使用，没有则为 null
-- evidence 字段：有具体数据/实验结果时使用，没有则为 null
-
-转录文本：
-{transcript}
-
-返回 JSON：
-{{
-  "qa_sections": [
-    {{
-      "question": "观众会问的问题？",
-      "answer": "完整的回答",
-      "timestamp": 120.0,
-      "quote": "值得展示的原话（或 null）",
-      "sub_points": ["要点1", "要点2"] 或 null,
-      "evidence": "实验数据（或 null）"
-    }}
-  ]
-}}"""
-
-
-async def extract_qa_sections(
-    segments: List[TextSegment],
-    category: VideoCategory,
-) -> List[QASection]:
-    transcript_text = format_transcript(segments)
-    guide = _QA_GUIDE.get(category.value, _QA_GUIDE["knowledge"])
-    prompt = USER_QA.format(
-        category_guide=guide,
-        transcript=transcript_text,
-    )
-    raw = await _call_claude(SYSTEM_QA, prompt)
-    data = _parse_json(raw)
-
-    return [
+    # 解析 QA
+    qa_sections = [
         QASection(
             question=q["question"],
             answer=q["answer"],
@@ -353,8 +282,20 @@ async def extract_qa_sections(
             sub_points=q.get("sub_points"),
             evidence=q.get("evidence"),
         )
-        for q in data["qa_sections"]
+        for q in data.get("qa_sections", [])
     ]
+
+    return {
+        "category": VideoCategory(cat_str),
+        "summary": data["summary"],
+        "practical_values": [
+            PracticalValue(point=p["point"], detail=p["detail"])
+            for p in data.get("practical_values", [])
+        ],
+        "concept_flow": concept_flow,
+        "term_groups": term_groups,
+        "qa_sections": qa_sections,
+    }
 
 
 # ── 术语追问 ─────────────────────────────────────────
